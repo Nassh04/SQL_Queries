@@ -1,0 +1,142 @@
+-- Stripping the Sql feeds of restricted informations. Kindy refer the framework alone 
+
+WITH sm_overlap AS
+(
+  SELECT DISTINCT ASIN
+  FROM AA
+  WHERE MARKETPLACE_ID IN ''
+  AND   website_id = 0
+  AND   program_code IN ('')
+  AND   selection_type = ''
+  AND   has_retail_flag = 1
+  AND   is_head_selection = 'Y'
+  AND   mapping_status IN ('')
+  AND   ASIN IS NOT NULL
+  AND   reporting_date = ''
+),
+vc_code AS
+(
+  SELECT b.ASIN,
+         b.vendor_pub_code AS vendor_code
+  FROM sm_overlap a
+    INNER JOIN BB b ON a.ASIN = b.ASIN
+    INNER JOIN CC c ON c.primary_vendor_code = b.vendor_pub_code
+    INNER JOIN DD d ON d.vendor_id = c.vendor_id
+  WHERE (c.is_deprecated IS NULL OR c.is_deprecated = 'N')
+  AND   d.country_code = ''
+),
+old_asin AS
+(
+  SELECT a.ASIN,
+         marketplace_id,
+         has_amzn_offering,
+         region_id,
+         snapshot_day,
+         product_site_launch_day
+  FROM EE a
+    INNER JOIN sm_overlap b ON a.asin = b.asin
+  WHERE region_id = 1
+  AND   MARKETPLACE_ID IN ({MARKETPLACE_ID})
+  AND   snapshot_day = ''
+  AND   has_amzn_offering = 'N'
+),
+new_asin AS
+(
+  SELECT a.ASIN,
+         marketplace_id,
+         has_amzn_offering,
+         region_id,
+         snapshot_day,
+         product_site_launch_day
+  FROM FF a
+    INNER JOIN sm_overlap b ON a.asin = b.asin
+  WHERE region_id = 1
+  AND   MARKETPLACE_ID IN ({MARKETPLACE_ID})
+  AND   snapshot_day IN (SELECT MAX(snapshot_day)
+                         FROM BOOKER_ext.D_MONTHLY_SELECTION_EFFICIENCY
+                         WHERE region_id = 1
+                         AND   MARKETPLACE_ID IN ({MARKETPLACE_ID})
+                         AND   snapshot_day >= '')
+),
+final_asin AS
+(
+  SELECT DISTINCT a.ASIN
+  FROM new_asin a
+    LEFT JOIN old_asin b ON a.asin = b.asin
+  WHERE ((a.has_amzn_offering = 'Y' AND a.product_site_launch_day < '' AND b.asin IS NOT NULL) OR a.product_site_launch_day >= '')
+),
+overall AS
+(
+  SELECT COUNT(website_item_id) AS branded_selection,
+         SUM(CASE WHEN (mapping_status IN ('')) THEN 1 ELSE 0 END) AS overlap_selection,
+         SUM(CASE WHEN (mapping_status IN ('') AND (a.asin = b.asin)) THEN 1 ELSE 0 END) AS new_overlap_selection,
+         CASE
+           WHEN (c.vendor_code IN ('')) THEN 'AVS'
+           ELSE 'NON-AVS'
+         END AS VENDOR_TYPE,
+         MARKETPLACE_ID,
+         program_code,
+         reporting_date
+  FROM SELECT_MON_DDL.D_SMT_IMG_PARITY_DTL a
+    LEFT JOIN final_asin b ON a.asin = b.asin
+    LEFT JOIN vc_code c ON a.asin = c.asin
+  WHERE MARKETPLACE_ID IN ('')
+  AND   website_id = 0
+  AND   program_code IN ('')
+  AND   selection_type = ''
+  AND   is_head_selection = ''
+  AND   has_retail_flag = 1
+  AND   reporting_date = ''
+  GROUP BY MARKETPLACE_ID,
+           program_code,
+           reporting_date,
+           CASE
+               WHEN (c.vendor_code IN ('')) THEN 'AVS'
+               ELSE 'NON-AVS'
+             END
+),
+rbs_comp AS
+(
+  SELECT COUNT(website_item_id) AS rbs_overlap,
+         COUNT(DISTINCT ASIN) AS rbs_unique_asin_contributed,
+         MARKETPLACE_ID,
+         program_code,
+         reporting_date,
+         'AVS' AS VENDOR_TYPE
+  FROM SELECT_MON_DDL.D_SMT_IMG_PARITY_DTL
+  WHERE MARKETPLACE_ID IN ({MARKETPLACE_ID})
+  AND   website_id = 0
+  AND   program_code IN ('')
+  AND   selection_type = ''
+  AND   is_head_selection = ''
+  AND   has_retail_flag = 
+  AND   mapping_status IN ('')
+  AND   ASIN IN (SELECT CAST(LEFT (tag_value,10) AS VARCHAR) AS ASIN
+                 FROM takao.tag_value_segment
+                 WHERE marketplaceid = 1
+                 AND   segmentid IN (''))
+  --- selection created ASINs
+  AND   reporting_date = ''
+  GROUP BY MARKETPLACE_ID,
+           program_code,
+           reporting_date
+)
+SELECT overall.program_code,
+       overall.reporting_date,
+       branded_selection,
+       overlap_selection,
+       new_overlap_selection,
+       (((CAST(overlap_selection AS FLOAT)) /(CAST(branded_selection AS FLOAT)))*100) AS parity,
+       (((CAST(new_overlap_selection AS FLOAT)) /(CAST(branded_selection AS FLOAT)))*100) AS new_parity,
+       rbs_comp.rbs_overlap AS rbs_overlap,
+       (((CAST(rbs_comp.rbs_overlap AS FLOAT)) /(CAST(overlap_selection AS FLOAT)))*100) AS rbs_overlap_contribution,
+       (((CAST(rbs_comp.rbs_overlap AS FLOAT)) /(CAST(new_overlap_selection AS FLOAT)))*100) AS new_rbs_overlap_contribution,
+       (((CAST(rbs_comp.rbs_overlap AS FLOAT)) /(CAST(overall.branded_selection AS FLOAT)))*100) AS rbs_parity_contribution,
+       rbs_unique_asin_contributed,
+       overall.MARKETPLACE_ID,
+       overall.VENDOR_TYPE
+FROM overall
+  LEFT JOIN rbs_comp
+         ON overall.MARKETPLACE_ID = rbs_comp.MARKETPLACE_ID
+        AND overall.program_code = rbs_comp.program_code
+        AND overall.VENDOR_TYPE = rbs_comp.VENDOR_TYPE
