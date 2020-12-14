@@ -1,0 +1,148 @@
+WITH ec_items AS 
+( 
+    SELECT ec_unique_id
+		, e.smt_website_item_id[0] AS website_item_id
+		, e.ec_marketplace_id AS marketplace_id
+		, CASE
+                    WHEN e.ec_marketplace_id='111172' THEN 'Australia'
+					WHEN e.ec_marketplace_id='526970' THEN 'Brazil'
+					WHEN e.ec_marketplace_id='7' THEN 'Canada'
+					WHEN e.ec_marketplace_id='3240' THEN 'China'
+					WHEN e.ec_marketplace_id='623225021' THEN 'Egypt'
+					WHEN e.ec_marketplace_id='5' THEN 'France'
+					WHEN e.ec_marketplace_id='4' THEN 'Germany'
+					WHEN e.ec_marketplace_id='44571' THEN 'India'
+					WHEN e.ec_marketplace_id='35691' THEN 'Italy'
+					WHEN e.ec_marketplace_id='6' THEN 'Japan'
+					WHEN e.ec_marketplace_id='771770' THEN 'Mexico'
+					WHEN e.ec_marketplace_id='328451' THEN 'Netherlands'
+					WHEN e.ec_marketplace_id='712115121' THEN 'Poland'
+					WHEN e.ec_marketplace_id='111162' THEN 'Russia'
+					WHEN e.ec_marketplace_id='338811' THEN 'Saudi Arabia'
+					WHEN e.ec_marketplace_id='104444012' THEN 'Singapore'
+					WHEN e.ec_marketplace_id='44551' THEN 'Spain'
+					WHEN e.ec_marketplace_id='704403121' THEN 'Sweden'
+					WHEN e.ec_marketplace_id='338851' THEN 'Turkey'
+					WHEN e.ec_marketplace_id='3' THEN 'UK'
+					WHEN e.ec_marketplace_id='338801' THEN 'United Arab Emirates'
+					WHEN e.ec_marketplace_id='1' THEN 'US'
+              END AS marketplace_name
+		, e.ec_region_id AS region_id
+		, e.smt_parent_sku[0] AS parent_sku
+		, e.ec_partition_id AS website_id
+        , e.ec_website AS website
+        FROM ee e 
+		WHERE	e.ec_partition_id IN ('') 
+                AND (e.ec_has_retail_offer IN ('Y','N') OR e.ec_has_retail_offer IS NULL) 
+                AND e.is_disabled IN ('false') 
+            --    AND Nvl (e.ec_last_seen_date,'INVALID_DATE') BETWEEN '' AND '' 
+				AND ec_ingestion_timestamp >= ''
+)
+
+, smpear AS (	SELECT	  smtItemId
+						, derivedBrandName	
+						, derivedGlProductGroupType	
+						, derivedGlSource	
+						, derivedProductCategory
+						, isValidSelection
+						, derivedSelectionType
+						, derivedBrandGapType
+						, hasCompetitor3pOffer
+						, hasCompetitorRetailOffer
+						, itemState
+						, CONCAT_WS('|',itemInactiveReasonCodes) AS itemInactiveReasonCodes
+						, programCode  
+						, uniqueId
+			
+				FROM	cc
+				WHERE	websiteId IN ('')
+			)
+
+, zenith_product AS (	SELECT	 asin_glance_view_band
+								,brand_prediction_band
+								,smp_asin
+								,gap_status
+								,ec_unique_id
+						FROM	xx	
+						WHERE	website_id IN ('')
+					)
+
+, zenith_merged AS	(	SELECT	 b2b_predicted_band
+								,b2b_predicted_glance_views
+								,computation_timestamp
+								,head_selection_asin_band
+								,head_selection_band
+								,head_selection_customer_reviews
+								,head_selection_last_seen_date
+								,is_head
+								,is_head_reason_code
+								,potentially_obsolete
+								,product_predicted_band
+								,product_predicted_glance_views
+								,ec_unique_id
+						FROM	YY
+						WHERE	website_id IN ('')
+					),
+
+final AS (	SELECT	e.ec_unique_id
+			, e.website
+			, e.website_id
+			, CASE
+				WHEN UPPER(s.derivedSelectionType) IN ('UNBRANDED','PRIVATELABEL') THEN UPPER(s.derivedSelectionType)
+				WHEN UPPER(s.derivedSelectionType) IN ('BRANDED') AND UPPER(s.isValidSelection) = 'TRUE' THEN UPPER(s.derivedSelectionType)
+				WHEN UPPER(s.derivedSelectionType) IN ('BRANDED') AND UPPER(s.isValidSelection) = 'FALSE' THEN 'INVALID_SELECTION'
+			/*	WHEN UPPER(s.derivedSelectionType) IS NULL AND UPPER(s.isValidSelection) = 'FALSE' AND s.itemInactiveReasonCodes IN ('MissingBrandIdAndScrapedBrandName') THEN 'UNBRANDED'
+			*/
+				WHEN UPPER(s.derivedSelectionType) IS NULL AND UPPER(s.isValidSelection) = 'FALSE' AND s.itemInactiveReasonCodes LIKE ('%MissingBrandIdAndScrapedBrandName%') THEN 'UNBRANDED'
+				WHEN UPPER(s.derivedSelectionType) IS NULL AND UPPER(s.isValidSelection) = 'FALSE' THEN 'INVALID_SELECTION'
+				ELSE UPPER(s.derivedSelectionType)
+			  END AS selection_type
+			, CASE 
+				WHEN UPPER(p.gap_status) = 'OVERLAP' THEN 'RETAIL_OVERLAP' 
+				WHEN UPPER(p.gap_status) IS NULL THEN 'TBD'
+				ELSE UPPER(p.gap_status)
+			  END AS mapping_status
+			, s.derivedBrandGapType
+			, s.isValidSelection
+			, CASE
+				WHEN (s.derivedGlProductGroupType IN	('540','541','542','228','467','510','325','195','194','251','75','125','123','121','364','370','394','395','396','397','543')) THEN 'CONSUMABLES'
+				WHEN (s.derivedGlProductGroupType IN	('402','406','407','408','409','410','411','412','414','426','437','438','447','448','449','450','451','500','405','465','470','493','494','129','298','334','351','136','318','297','327','340','111','350','349','356','366','367','400','424','425')) THEN 'DIGITAL'
+				WHEN (s.derivedGlProductGroupType IN	('484','496','421','422','468','469','504','44','79','201','263','107','147','265','328','86','264','200','199','236','261','293','23','22','229','259','267','21','60','196','441','517','594','353','354','355')) THEN 'HARDLINES'
+				WHEN (s.derivedGlProductGroupType IN ('14','15','20','53','18','50','27','74','65','63','114','153','258','360','362')) THEN 'MEDIA'
+				WHEN (s.derivedGlProductGroupType IN ('515','193','246','226','219','309','241','198','197')) THEN 'SOFTLINES'
+				ELSE 'UNKNOWN'
+			 END AS reconciled_pl_group
+			, s.derivedGlProductGroupType AS reconciled_gl_code	
+			, s.derivedProductCategory	AS reconciled_product_category
+			, b.is_head
+			, s.programCode   
+	FROM	ec_items e 
+		LEFT JOIN	XX	b	ON	b.ec_unique_id = e.ec_unique_id
+		LEFT JOIN	yy	p	ON	p.ec_unique_id = e.ec_unique_id
+		LEFT JOIN	zz	s	ON	s.uniqueId = e.ec_unique_id
+		)
+		
+	SELECT	COUNT(z.ec_unique_id) AS item_count
+			,z.website
+			,z.website_id
+			,z.selection_type
+			,z.mapping_status
+			,z.derivedBrandGapType
+			,z.isValidSelection
+			,z.reconciled_pl_group
+			,z.reconciled_gl_code
+			,z.reconciled_product_category
+			,z.is_head
+			,z.programCode
+	FROM final z		
+	GROUP BY	z.website
+				,z.website_id
+				,z.selection_type
+				,z.mapping_status
+				,z.derivedBrandGapType
+				,z.isValidSelection
+				,z.reconciled_pl_group
+				,z.reconciled_gl_code
+				,z.reconciled_product_category
+				,z.is_head
+				,z.programCode
