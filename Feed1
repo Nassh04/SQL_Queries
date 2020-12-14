@@ -1,3 +1,5 @@
+-- Stripping the Sql feeds of restricted informations. Kindy refer the framework alone
+
 WITH ec_items AS 
 ( 
     SELECT ec_unique_id
